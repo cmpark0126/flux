@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from glob import iglob
 
 import torch
+from torch.profiler import profile, record_function, ProfilerActivity
 from einops import rearrange
 from fire import Fire
 from PIL import ExifTags, Image
@@ -172,81 +173,104 @@ def main(
 
     if loop:
         opts = parse_prompt(opts)
+        
+    start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
 
     while opts is not None:
         if opts.seed is None:
             opts.seed = rng.seed()
         print(f"Generating with seed {opts.seed}:\n{opts.prompt}")
-        t0 = time.perf_counter()
+        with torch.no_grad():
+            with torch.profiler.profile(on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'), with_stack=True) as prof:
+                t0 = time.perf_counter()
+                start.record()
 
-        # prepare input
-        x = get_noise(
-            1,
-            opts.height,
-            opts.width,
-            device=torch_device,
-            dtype=torch.bfloat16,
-            seed=opts.seed,
-        )
-        opts.seed = None
-        if offload:
-            ae = ae.cpu()
-            torch.cuda.empty_cache()
-            t5, clip = t5.to(torch_device), clip.to(torch_device)
-        inp = prepare(t5, clip, x, prompt=opts.prompt)
-        timesteps = get_schedule(opts.num_steps, inp["img"].shape[1], shift=(name != "flux-schnell"))
+                # prepare input
+                x = get_noise(
+                    1,
+                    opts.height,
+                    opts.width,
+                    device=torch_device,
+                    dtype=torch.bfloat16,
+                    seed=opts.seed,
+                )
+                opts.seed = None
+                if offload:
+                    ae = ae.cpu()
+                    torch.cuda.empty_cache()
+                    t5, clip = t5.to(torch_device), clip.to(torch_device)
+                inp = prepare(t5, clip, x, prompt=opts.prompt)
+                timesteps = get_schedule(opts.num_steps, inp["img"].shape[1], shift=(name != "flux-schnell"))
 
-        # offload TEs to CPU, load model to gpu
-        if offload:
-            t5, clip = t5.cpu(), clip.cpu()
-            torch.cuda.empty_cache()
-            model = model.to(torch_device)
+                end.record()
+                torch.cuda.synchronize()
+                print(f"prepare time: {start.elapsed_time(end):.2f} ms")
 
-        # denoise initial noise
-        x = denoise(model, **inp, timesteps=timesteps, guidance=opts.guidance)
+                start.record()
 
-        # offload model, load autoencoder to gpu
-        if offload:
-            model.cpu()
-            torch.cuda.empty_cache()
-            ae.decoder.to(x.device)
+                # offload TEs to CPU, load model to gpu
+                if offload:
+                    t5, clip = t5.cpu(), clip.cpu()
+                    torch.cuda.empty_cache()
+                    model = model.to(torch_device)
 
-        # decode latents to pixel space
-        x = unpack(x.float(), opts.height, opts.width)
-        with torch.autocast(device_type=torch_device.type, dtype=torch.bfloat16):
-            x = ae.decode(x)
-        t1 = time.perf_counter()
+                # denoise initial noise
+                x = denoise(model, **inp, timesteps=timesteps, guidance=opts.guidance)
 
-        fn = output_name.format(idx=idx)
-        print(f"Done in {t1 - t0:.1f}s. Saving {fn}")
-        # bring into PIL format and save
-        x = x.clamp(-1, 1)
-        x = embed_watermark(x.float())
-        x = rearrange(x[0], "c h w -> h w c")
+                end.record()
+                torch.cuda.synchronize()
+                print(f"flux time: {start.elapsed_time(end):.2f} ms")
 
-        img = Image.fromarray((127.5 * (x + 1.0)).cpu().byte().numpy())
-        nsfw_score = [x["score"] for x in nsfw_classifier(img) if x["label"] == "nsfw"][0]
-        
-        if nsfw_score < NSFW_THRESHOLD:
-            exif_data = Image.Exif()
-            exif_data[ExifTags.Base.Software] = "AI generated;txt2img;flux"
-            exif_data[ExifTags.Base.Make] = "Black Forest Labs"
-            exif_data[ExifTags.Base.Model] = name
-            if add_sampling_metadata:
-                exif_data[ExifTags.Base.ImageDescription] = prompt
-            img.save(fn, exif=exif_data, quality=95, subsampling=0)
-            idx += 1
-        else:
-            print("Your generated image may contain NSFW content.")
+                start.record()
 
-        if loop:
-            print("-" * 80)
-            opts = parse_prompt(opts)
-        else:
-            opts = None
+                # offload model, load autoencoder to gpu
+                if offload:
+                    model.cpu()
+                    torch.cuda.empty_cache()
+                    ae.decoder.to(x.device)
 
+                # decode latents to pixel space
+                x = unpack(x.float(), opts.height, opts.width)
+                with torch.autocast(device_type=torch_device.type, dtype=torch.bfloat16):
+                    x = ae.decode(x)
+
+                end.record()
+                torch.cuda.synchronize()
+                print(f"ae decode time: {start.elapsed_time(end):.2f} ms")
+
+                t1 = time.perf_counter()
+
+                fn = output_name.format(idx=idx)
+                print(f"Done in {t1 - t0:.1f}s. Saving {fn}")
+                # bring into PIL format and save
+                x = x.clamp(-1, 1)
+                x = embed_watermark(x.float())
+                x = rearrange(x[0], "c h w -> h w c")
+
+                img = Image.fromarray((127.5 * (x + 1.0)).cpu().byte().numpy())
+                nsfw_score = [x["score"] for x in nsfw_classifier(img) if x["label"] == "nsfw"][0]
+                
+                if nsfw_score < NSFW_THRESHOLD:
+                    exif_data = Image.Exif()
+                    exif_data[ExifTags.Base.Software] = "AI generated;txt2img;flux"
+                    exif_data[ExifTags.Base.Make] = "Black Forest Labs"
+                    exif_data[ExifTags.Base.Model] = name
+                    if add_sampling_metadata:
+                        exif_data[ExifTags.Base.ImageDescription] = prompt
+                    img.save(fn, exif=exif_data, quality=95, subsampling=0)
+                    idx += 1
+                else:
+                    print("Your generated image may contain NSFW content.")
+
+                if loop:
+                    print("-" * 80)
+                    opts = parse_prompt(opts)
+                else:
+                    opts = None
 
 def app():
+    for _ in range(10):  # warm-up
+        Fire(main)
     Fire(main)
 
 

@@ -1,5 +1,6 @@
 import math
 from typing import Callable
+import time
 
 import torch
 from einops import rearrange, repeat
@@ -45,12 +46,25 @@ def prepare(t5: HFEmbedder, clip: HFEmbedder, img: Tensor, prompt: str | list[st
 
     if isinstance(prompt, str):
         prompt = [prompt]
+
+    start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+    start.record()
     txt = t5(prompt)
+    end.record()
+    torch.cuda.synchronize()
+    print(f"t5 time: {start.elapsed_time(end):.2f} ms")
+
     if txt.shape[0] == 1 and bs > 1:
         txt = repeat(txt, "1 ... -> bs ...", bs=bs)
     txt_ids = torch.zeros(bs, txt.shape[1], 3)
 
+    start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+    start.record()
     vec = clip(prompt)
+    end.record()
+    torch.cuda.synchronize()
+    print(f"clip time: {start.elapsed_time(end):.2f} ms")
+
     if vec.shape[0] == 1 and bs > 1:
         vec = repeat(vec, "1 ... -> bs ...", bs=bs)
 
