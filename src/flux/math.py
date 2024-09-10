@@ -1,14 +1,16 @@
 import torch
 from einops import rearrange
 from torch import Tensor
-
+from flash_attn_interface import flash_attn_func
 
 def attention(q: Tensor, k: Tensor, v: Tensor, pe: Tensor) -> Tensor:
     q, k = apply_rope(q, k, pe)
 
     x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
-    x = rearrange(x, "B H L D -> B L (H D)")
+    # q,k,v = [x.permute(0,2,1,3) for x in [q,k,v]]
+    # x = flash_attn_func(q,k,v)[0].permute(0,2,1,3)
 
+    x = rearrange(x, "B H L D -> B L (H D)")
     return x
 
 

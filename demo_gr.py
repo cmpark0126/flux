@@ -36,6 +36,7 @@ class FluxGenerator:
             offload=self.offload,
             is_schnell=self.is_schnell,
         )
+        self.model = torch.compile(self.model)
 
     @torch.inference_mode()
     def generate_image(
