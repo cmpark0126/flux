@@ -4,8 +4,9 @@ import torch
 from torch import Tensor, nn
 
 from flux.modules.layers import (DoubleStreamBlock, EmbedND, LastLayer,
-                                 MLPEmbedder, SingleStreamBlock,
-                                 timestep_embedding)
+                                 MLPEmbedder, timestep_embedding)
+
+from triton_kernels import SingleStreamBlock
 
 
 @dataclass
