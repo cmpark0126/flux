@@ -3,10 +3,10 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor, nn
 
-from flux.modules.layers import (DoubleStreamBlock, EmbedND, LastLayer,
+from flux.modules.layers import (EmbedND, LastLayer,
                                  MLPEmbedder, timestep_embedding)
 
-from triton_kernels import SingleStreamBlock
+from triton_kernels import SingleStreamBlock, DoubleStreamBlock
 
 
 @dataclass
