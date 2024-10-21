@@ -1,14 +1,53 @@
+import os
+
 import torch
+from torch.nn.functional import scaled_dot_product_attention
+import xformers.ops
+import xformers.ops.fmha as fmha
 from einops import rearrange
 from torch import Tensor
-from flash_attn_interface import flash_attn_func
+from triton.ops import attention as attention_triton
+
+
+def compiled_xformers_flash_hopper(q, k, v):
+    torch_custom_op_compile = os.getenv("TORCH_CUSTOM_OP_COMPILE", "0") == "1"
+
+    if torch_custom_op_compile:
+        xformers_flash3 = torch.compile(
+            xformers.ops.fmha.flash3.FwOp,
+            fullgraph=True,
+            backend="inductor",
+        )
+    else:
+        xformers_flash3 = xformers.ops.fmha.flash3.FwOp()
+    softmax_scale = q.size(-1) ** -0.5
+
+    return fmha.memory_efficient_attention_forward(  # noqa: E731
+        q,
+        k,
+        v,
+        scale=softmax_scale,
+        op=xformers_flash3,
+    )
 
 def attention(q: Tensor, k: Tensor, v: Tensor, pe: Tensor) -> Tensor:
+    xformers_flash3 = os.getenv("XFORMERS_FLASH3", "0") == "1"
+    torch_sdpa = os.getenv("TORCH_SDPA", "0") == "1"
+    triton_attention = os.getenv("TRITON_ATTENTION", "0") == "1"
+
     q, k = apply_rope(q, k, pe)
 
-    x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
-    # q,k,v = [x.permute(0,2,1,3) for x in [q,k,v]]
-    # x = flash_attn_func(q,k,v)[0].permute(0,2,1,3)
+    if xformers_flash3:
+        q = q.permute(0, 2, 1, 3) # B, H, S, D
+        k = k.permute(0, 2, 1, 3) # B, H, S, D
+        v = v.permute(0, 2, 1, 3) # B, H, S, D
+        
+        x = compiled_xformers_flash_hopper(q, k, v).permute(0,2,1,3)
+    if torch_sdpa:
+        x = scaled_dot_product_attention(q, k, v)
+    if triton_attention:
+        softmax_scale = q.size(-1) ** -0.5
+        x = attention_triton(q, k, v, True, softmax_scale)
 
     x = rearrange(x, "B H L D -> B L (H D)")
     return x

@@ -9,31 +9,14 @@ requires-python = ">=3.10"
 license = { file = "LICENSE.md" }
 dynamic = ["version"]
 dependencies = [
-  "torch >= 2.0.0",
-  "torchvision",
   "einops",
   "fire >= 0.6.0",
   "huggingface-hub",
   "safetensors",
-  "sentencepiece",
   "transformers",
   "tokenizers",
-  "protobuf",
   "requests",
   "invisible-watermark",
-]
-
-[project.optional-dependencies]
-streamlit = [
-  "streamlit",
-  "streamlit-keyup",
-]
-gradio = [
-  "gradio",
-]
-all = [
-  "flux[streamlit]",
-  "flux[gradio]",
 ]
 
 [project.scripts]
