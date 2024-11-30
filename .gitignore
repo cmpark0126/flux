@@ -228,3 +228,9 @@ $RECYCLE.BIN/
 *.lnk
 
 # End of https://www.toptal.com/developers/gitignore/api/linux,windows,macos,visualstudiocode,python
+
+# Ignore output files
+output/
+
+# Ignore version file which is generated dynamically
+src/flux/_version.py
