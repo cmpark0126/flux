@@ -15,8 +15,10 @@ try:
     import triton_kernels
     from triton_kernels import SingleStreamBlock, DoubleStreamBlock
 except ImportError:
+    print("Triton kernels not found, using flux native implementation.")
     from flux.modules.layers import SingleStreamBlock, DoubleStreamBlock
 except ModuleNotFoundError:
+    print("Triton kernels not found, using flux native implementation.")
     from flux.modules.layers import SingleStreamBlock, DoubleStreamBlock
 except Exception as e:
     print(f"Error: {e}")
