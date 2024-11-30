@@ -5,13 +5,15 @@ from dataclasses import dataclass
 from glob import iglob
 
 import torch
+import torch._inductor.config as inductor_config
 from fire import Fire
 from transformers import pipeline
 
 from flux.sampling import denoise, get_noise, get_schedule, prepare, unpack
-from flux.util import configs, load_ae, load_clip, load_flow_model, load_t5, save_image
+from flux.util import configs, load_ae, load_clip, load_flow_model, load_t5, save_image, save_image_without_nsfw_check
 
-NSFW_THRESHOLD = 0.85
+CHECK_NSFW = False
+TORCH_COMPILE = os.getenv("TORCH_COMPILE", "0") == "1"
 
 
 @dataclass
@@ -158,6 +160,18 @@ def main(
     model = load_flow_model(name, device="cpu" if offload else torch_device)
     ae = load_ae(name, device="cpu" if offload else torch_device)
 
+    if TORCH_COMPILE:
+        # torch._inductor.list_options()
+        inductor_config.max_autotune_gemm_backends = "ATEN,TRITON"
+        inductor_config.benchmark_kernel = True
+        inductor_config.cuda.compile_opt_level = "-O3"  # default: "-O1"
+        inductor_config.cuda.use_fast_math = True
+        model = torch.compile(model,
+                    fullgraph=True,
+                    backend="inductor",
+                    mode="max-autotune",
+                    )
+
     rng = torch.Generator(device="cpu")
     opts = SamplingOptions(
         prompt=prompt,
@@ -221,7 +235,10 @@ def main(
         fn = output_name.format(idx=idx)
         print(f"Done in {t1 - t0:.1f}s. Saving {fn}")
 
-        idx = save_image(nsfw_classifier, name, output_name, idx, x, add_sampling_metadata, prompt)
+        if CHECK_NSFW:
+            idx = save_image(nsfw_classifier, name, output_name, idx, x, add_sampling_metadata, prompt)
+        else:
+            idx = save_image_without_nsfw_check(name, output_name, idx, x, add_sampling_metadata, prompt)
 
         if loop:
             print("-" * 80)

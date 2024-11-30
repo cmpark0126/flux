@@ -13,6 +13,35 @@ from flux.modules.autoencoder import AutoEncoder, AutoEncoderParams
 from flux.modules.conditioner import HFEmbedder
 
 
+def save_image_without_nsfw_check(
+    name: str,
+    output_name: str,
+    idx: int,
+    x: torch.Tensor,
+    add_sampling_metadata: bool,
+    prompt: str,
+) -> int:
+    fn = output_name.format(idx=idx)
+    print(f"Saving {fn}")
+    # bring into PIL format and save
+    x = x.clamp(-1, 1)
+    x = embed_watermark(x.float())
+    x = rearrange(x[0], "c h w -> h w c")
+
+    img = Image.fromarray((127.5 * (x + 1.0)).cpu().byte().numpy())
+
+    exif_data = Image.Exif()
+    exif_data[ExifTags.Base.Software] = "AI generated;txt2img;flux"
+    exif_data[ExifTags.Base.Make] = "Black Forest Labs"
+    exif_data[ExifTags.Base.Model] = name
+    if add_sampling_metadata:
+        exif_data[ExifTags.Base.ImageDescription] = prompt
+    img.save(fn, exif=exif_data, quality=95, subsampling=0)
+    idx += 1
+
+    return idx
+
+
 def save_image(
     nsfw_classifier,
     name: str,
