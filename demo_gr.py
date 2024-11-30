@@ -26,7 +26,7 @@ def get_models(name: str, device: torch.device, offload: bool, is_schnell: bool)
 
 
 class FluxGenerator:
-    def __init__(self, model_name: str, device: str, offload: bool):
+    def __init__(self, model_name: str, device: str, offload: bool, use_compile: bool = False):
         self.device = torch.device(device)
         self.offload = offload
         self.model_name = model_name
@@ -37,6 +37,8 @@ class FluxGenerator:
             offload=self.offload,
             is_schnell=self.is_schnell,
         )
+        if use_compile:
+            self.model = torch.compile(self.model)
 
     @torch.inference_mode()
     def generate_image(

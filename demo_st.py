@@ -25,6 +25,7 @@ from flux.util import (
 )
 
 NSFW_THRESHOLD = 0.85
+CHECK_NSFW = False
 
 
 @st.cache_resource()
@@ -242,7 +243,7 @@ def main(
         img = Image.fromarray((127.5 * (x + 1.0)).cpu().byte().numpy())
         nsfw_score = [x["score"] for x in nsfw_classifier(img) if x["label"] == "nsfw"][0]
 
-        if nsfw_score < NSFW_THRESHOLD:
+        if not CHECK_NSFW or nsfw_score < NSFW_THRESHOLD:
             buffer = BytesIO()
             exif_data = Image.Exif()
             if init_image is None:
