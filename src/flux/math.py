@@ -7,6 +7,7 @@ from einops import rearrange
 
 
 def _compiled_xformers_flash_hopper(q, k, v):
+    import xformers
     import xformers.ops
 
     torch_custom_op_compile = os.getenv("TORCH_CUSTOM_OP_COMPILE", "0") == "1"
@@ -29,6 +30,7 @@ def _compiled_xformers_flash_hopper(q, k, v):
         op=xformers_flash3,
     )
 
+
 def attention(q: Tensor, k: Tensor, v: Tensor, pe: Tensor) -> Tensor:
     xformers_flash3 = os.getenv("XFORMERS_FLASH3", "0") == "1"
     torch_sdpa = os.getenv("TORCH_SDPA", "0") == "1"
@@ -37,24 +39,12 @@ def attention(q: Tensor, k: Tensor, v: Tensor, pe: Tensor) -> Tensor:
     q, k = apply_rope(q, k, pe)
 
     if xformers_flash3:
-        if torch_sdpa or triton_attention:
-            print(
-                "Warning: xformers_flash3 is enabled, but torch_sdpa or triton_attention is also enabled. "
-                "Please remain only one of them."
-            )
+        q = q.permute(0, 2, 1, 3)  # B, H, S, D
+        k = k.permute(0, 2, 1, 3)  # B, H, S, D
+        v = v.permute(0, 2, 1, 3)  # B, H, S, D
 
-        q = q.permute(0, 2, 1, 3) # B, H, S, D
-        k = k.permute(0, 2, 1, 3) # B, H, S, D
-        v = v.permute(0, 2, 1, 3) # B, H, S, D
-        
         x = _compiled_xformers_flash_hopper(q, k, v).permute(0,2,1,3)
     elif torch_sdpa:
-        if triton_attention:
-            print(
-                "Warning: torch_sdpa is enabled, but triton_attention is also enabled. "
-                "Please remain only one of them."
-            )
-
         x = scaled_dot_product_attention(q, k, v)
     elif triton_attention:
         from triton.ops import attention as attention_triton

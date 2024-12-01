@@ -92,4 +92,7 @@ $ python -m flux.api --prompt="A beautiful beach" image show
 cd $HOME && git clone https://github.com/ai-compiler-study/triton-kernels.git
 cd triton-kernels
 pip install -e .
+
+# to ebale xformers at math.py
+pip install -U xformers --index-url https://download.pytorch.org/whl/cu124
 ```
