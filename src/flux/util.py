@@ -1,3 +1,4 @@
+import copy
 import os
 from dataclasses import dataclass
 
@@ -343,7 +344,11 @@ def print_load_warning(missing: list[str], unexpected: list[str]) -> None:
 
 
 def load_flow_model(
-    name: str, device: str | torch.device = "cuda", hf_download: bool = True, verbose: bool = False
+    name: str,
+    device: str | torch.device = "cuda",
+    hf_download: bool = True,
+    verbose: bool = False,
+    use_custom_triton_kernels: bool = False,
 ) -> Flux:
     # Loading Flux
     print("Init model")
@@ -358,10 +363,12 @@ def load_flow_model(
         ckpt_path = hf_hub_download(configs[name].repo_id, configs[name].repo_flow)
 
     with torch.device("meta" if ckpt_path is not None else device):
+        params = copy.deepcopy(configs[name].params)
+        params.use_custom_triton_kernels = use_custom_triton_kernels
         if lora_path is not None:
-            model = FluxLoraWrapper(params=configs[name].params).to(torch.bfloat16)
+            model = FluxLoraWrapper(params=params).to(torch.bfloat16)
         else:
-            model = Flux(configs[name].params).to(torch.bfloat16)
+            model = Flux(params).to(torch.bfloat16)
 
     if ckpt_path is not None:
         print("Loading checkpoint")

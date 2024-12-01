@@ -102,6 +102,7 @@ def main(
     ),
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
     torch_compile: bool = False,
+    use_custom_triton_kernels: bool = False,
     check_nsfw: bool = True,
     num_steps: int | None = None,
     loop: bool = False,
@@ -156,7 +157,7 @@ def main(
     # init all components
     t5 = load_t5(torch_device, max_length=256 if name == "flux-schnell" else 512)
     clip = load_clip(torch_device)
-    model = load_flow_model(name, device="cpu" if offload else torch_device)
+    model = load_flow_model(name, device="cpu" if offload else torch_device, use_custom_triton_kernels=use_custom_triton_kernels)  # noqa
     ae = load_ae(name, device="cpu" if offload else torch_device)
 
     if torch_compile:
@@ -207,14 +208,14 @@ def main(
         if offload:
             t5, clip = t5.cpu(), clip.cpu()
             torch.cuda.empty_cache()
-            model = model.to(torch_device)
+            model = model.to(torch_device)  # type: ignore
 
         # denoise initial noise
-        x = denoise(model, **inp, timesteps=timesteps, guidance=opts.guidance)
+        x = denoise(model, **inp, timesteps=timesteps, guidance=opts.guidance)  # type: ignore
 
         # offload model, load autoencoder to gpu
         if offload:
-            model.cpu()
+            model.cpu()  # type: ignore
             torch.cuda.empty_cache()
             ae.decoder.to(x.device)
 

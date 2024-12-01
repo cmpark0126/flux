@@ -11,18 +11,6 @@ from flux.modules.layers import (
 )
 from flux.modules.lora import LinearLora, replace_linear_with_lora
 
-try:
-    import triton_kernels
-    from triton_kernels import SingleStreamBlock, DoubleStreamBlock
-except ImportError:
-    print("Triton kernels not found, using flux native implementation.")
-    from flux.modules.layers import SingleStreamBlock, DoubleStreamBlock
-except ModuleNotFoundError:
-    print("Triton kernels not found, using flux native implementation.")
-    from flux.modules.layers import SingleStreamBlock, DoubleStreamBlock
-except Exception as e:
-    print(f"Error: {e}")
-    from flux.modules.layers import SingleStreamBlock, DoubleStreamBlock
 
 @dataclass
 class FluxParams:
@@ -39,6 +27,7 @@ class FluxParams:
     theta: int
     qkv_bias: bool
     guidance_embed: bool
+    use_custom_triton_kernels: bool = False
 
 
 class Flux(nn.Module):
@@ -48,6 +37,15 @@ class Flux(nn.Module):
 
     def __init__(self, params: FluxParams):
         super().__init__()
+
+        if params.use_custom_triton_kernels:
+            try:
+                from triton_kernels import SingleStreamBlock, DoubleStreamBlock  # type: ignore
+            except ModuleNotFoundError as e:
+                print("Failed to import custom Triton kernels")
+                raise e
+        else:
+            from flux.modules.layers import SingleStreamBlock, DoubleStreamBlock
 
         self.params = params
         self.in_channels = params.in_channels
