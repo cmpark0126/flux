@@ -12,9 +12,6 @@ from transformers import pipeline
 from flux.sampling import denoise, get_noise, get_schedule, prepare, unpack
 from flux.util import configs, load_ae, load_clip, load_flow_model, load_t5, save_image, save_image_without_nsfw_check
 
-CHECK_NSFW = False
-TORCH_COMPILE = os.getenv("TORCH_COMPILE", "0") == "1"
-
 
 @dataclass
 class SamplingOptions:
@@ -104,6 +101,8 @@ def main(
         '"FLUX" is painted over it in big, red brush strokes with visible texture'
     ),
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
+    torch_compile: bool = False,
+    check_nsfw: bool = True,
     num_steps: int | None = None,
     loop: bool = False,
     guidance: float = 3.5,
@@ -160,17 +159,13 @@ def main(
     model = load_flow_model(name, device="cpu" if offload else torch_device)
     ae = load_ae(name, device="cpu" if offload else torch_device)
 
-    if TORCH_COMPILE:
+    if torch_compile:
         # torch._inductor.list_options()
         inductor_config.max_autotune_gemm_backends = "ATEN,TRITON"
         inductor_config.benchmark_kernel = True
         inductor_config.cuda.compile_opt_level = "-O3"  # default: "-O1"
         inductor_config.cuda.use_fast_math = True
-        model = torch.compile(model,
-                    fullgraph=True,
-                    backend="inductor",
-                    mode="max-autotune",
-                    )
+        model = torch.compile(model, fullgraph=True, backend="inductor", mode="max-autotune")
 
     rng = torch.Generator(device="cpu")
     opts = SamplingOptions(
@@ -235,7 +230,7 @@ def main(
         fn = output_name.format(idx=idx)
         print(f"Done in {t1 - t0:.1f}s. Saving {fn}")
 
-        if CHECK_NSFW:
+        if check_nsfw:
             idx = save_image(nsfw_classifier, name, output_name, idx, x, add_sampling_metadata, prompt)
         else:
             idx = save_image_without_nsfw_check(name, output_name, idx, x, add_sampling_metadata, prompt)

@@ -1,4 +1,3 @@
-import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,9 +16,6 @@ from flux.util import (
     load_t5,
 )
 
-# CLI와 동일한 기본 설정 유지
-TORCH_COMPILE = os.getenv("TORCH_COMPILE", "0") == "1"
-
 app = typer.Typer()
 console = Console()
 
@@ -32,6 +28,7 @@ class BenchmarkOptions:
     width: int = 1360
     height: int = 768
     prompt: str = "a photo of a forest with mist swirling around the tree trunks"
+    torch_compile: bool = False
     num_steps: int | None = None
     guidance: float = 3.5
     warmup_iterations: int = 3
@@ -63,7 +60,7 @@ class FluxBenchmark:
         self.model = load_flow_model(self.options.name, device=self.device)
         self.ae = load_ae(self.options.name, device=self.device)
 
-        if TORCH_COMPILE:
+        if self.options.torch_compile:
             console.print("Compiling model...")
             inductor_config.max_autotune_gemm_backends = "ATEN,TRITON"
             inductor_config.benchmark_kernel = True
@@ -167,6 +164,7 @@ def run(
     width: int = 1360,
     height: int = 768,
     prompt: str = "a photo of a forest with mist swirling around the tree trunks",
+    torch_compile: bool = False,
     num_steps: int | None = None,
     guidance: float = 3.5,
     warmup_iterations: int = 3,
@@ -180,6 +178,7 @@ def run(
         width=width,
         height=height,
         prompt=prompt,
+        torch_compile=torch_compile,
         num_steps=num_steps,
         guidance=guidance,
         warmup_iterations=warmup_iterations,
