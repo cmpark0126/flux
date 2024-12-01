@@ -13,13 +13,13 @@ def _compiled_xformers_flash_hopper(q, k, v):
     torch_custom_op_compile = os.getenv("TORCH_CUSTOM_OP_COMPILE", "0") == "1"
 
     if torch_custom_op_compile:
-        xformers_flash3 = torch.compile(
-            xformers.ops.fmha.flash3.FwOp,
+        xformers_flash = torch.compile(
+            xformers.ops.fmha.flash.FwOp,
             fullgraph=True,
             backend="inductor",
         )
     else:
-        xformers_flash3 = xformers.ops.fmha.flash3.FwOp()
+        xformers_flash = xformers.ops.fmha.flash.FwOp()
     softmax_scale = q.size(-1) ** -0.5
 
     return xformers.ops.fmha.memory_efficient_attention_forward(  # noqa: E731
@@ -27,18 +27,18 @@ def _compiled_xformers_flash_hopper(q, k, v):
         k,
         v,
         scale=softmax_scale,
-        op=xformers_flash3,
+        op=xformers_flash,
     )
 
 
 def attention(q: Tensor, k: Tensor, v: Tensor, pe: Tensor) -> Tensor:
-    xformers_flash3 = os.getenv("XFORMERS_FLASH3", "0") == "1"
+    xformers_flash = os.getenv("XFORMERS_FLASH", "0") == "1"
     torch_sdpa = os.getenv("TORCH_SDPA", "0") == "1"
     triton_attention = os.getenv("TRITON_ATTENTION", "0") == "1"
 
     q, k = apply_rope(q, k, pe)
 
-    if xformers_flash3:
+    if xformers_flash:
         q = q.permute(0, 2, 1, 3)  # B, H, S, D
         k = k.permute(0, 2, 1, 3)  # B, H, S, D
         v = v.permute(0, 2, 1, 3)  # B, H, S, D
