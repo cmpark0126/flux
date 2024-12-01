@@ -85,3 +85,11 @@ $ python -m flux.api --prompt="A beautiful beach" save outputs/api
 # open the image directly
 $ python -m flux.api --prompt="A beautiful beach" image show
 ```
+
+## AI compile study
+```bash
+# to enable use-custom-triton-kernels option
+cd $HOME && git clone https://github.com/ai-compiler-study/triton-kernels.git
+cd triton-kernels
+pip install -e .
+```
