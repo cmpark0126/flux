@@ -167,7 +167,7 @@ class FluxBenchmark:
         console.print("\n[bold green]Benchmark Results:")
         console.print(f"99th percentile inference time: {p99_time:.3f}s")
         console.print(f"90th percentile inference time: {p90_time:.3f}s")
-        console.print(f"Median inference time: {p50_time:.3f}s")
+        console.print(f"50th inference time: {p50_time:.3f}s")
         console.print(f"Mean inference time: {mean_time:.3f}s")
         console.print(f"Std deviation: {std_time:.3f}s")
 
@@ -176,6 +176,9 @@ class FluxBenchmark:
             results_data = {
                 "config": self.options.__dict__,
                 "times": self.results,
+                "p99_time": p99_time,
+                "p90_time": p90_time,
+                "p50_time": p50_time,
                 "mean_time": mean_time,
                 "std_time": std_time,
             }
@@ -192,9 +195,11 @@ class FluxBenchmark:
 
 if __name__ == "__main__":
     base_dir_path = os.path.dirname(os.path.abspath(__file__))
+
     with open(os.path.join(base_dir_path, "benchmark_opts.json"), "r") as f:
         opts = json.load(f)
 
+    sub_dir_name = f"{time.strftime('%Y%m%d-%H%M%S')}"
     for opt_name, opt in opts.items():
         console.print(
             f"\n[bold cyan]Running benchmark for configuration: {opt_name}[/bold cyan]"
@@ -202,9 +207,28 @@ if __name__ == "__main__":
         console.print("=" * 80)
 
         benchmark_opt = BenchmarkOptions(**opt)
-        benchmark_opt.output_dir = os.path.join(base_dir_path, benchmark_opt.output_dir)
+        benchmark_opt.output_dir = os.path.join(
+            base_dir_path, benchmark_opt.output_dir, sub_dir_name
+        )
         console.print(f"Options: {benchmark_opt}")
 
-        benchmark = FluxBenchmark(benchmark_opt)
-        benchmark.setup_model()
-        benchmark.run_benchmark()
+        try:
+            benchmark = FluxBenchmark(benchmark_opt)
+            benchmark.setup_model()
+            benchmark.run_benchmark()
+        except Exception as e:
+            console.print(f"[bold red]Error running benchmark: {e}[/bold red]")
+
+            if benchmark_opt.save_results:
+                timestamp = time.strftime("%Y%m%d-%H%M%S")
+                result_file = (
+                    Path(benchmark_opt.output_dir)
+                    / f"benchmark_results_{timestamp}.json"
+                )
+                with open(result_file, "w") as f:
+                    json.dump(
+                        {"error": str(e), "config": benchmark_opt.__dict__}, f, indent=2
+                    )
+                console.print(f"\nResults saved to {result_file}")
+
+            continue
