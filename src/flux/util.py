@@ -349,6 +349,7 @@ def load_flow_model(
     hf_download: bool = True,
     verbose: bool = False,
     use_custom_triton_kernels: bool = False,
+    attention_method: str = "torch_sdpa",
 ) -> Flux:
     # Loading Flux
     print("Init model")
@@ -365,6 +366,7 @@ def load_flow_model(
     with torch.device("meta" if ckpt_path is not None else device):
         params = copy.deepcopy(configs[name].params)
         params.use_custom_triton_kernels = use_custom_triton_kernels
+        params.attention_method = attention_method
         if lora_path is not None:
             model = FluxLoraWrapper(params=params).to(torch.bfloat16)
         else:

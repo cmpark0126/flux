@@ -103,6 +103,7 @@ def main(
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
     torch_compile: bool = False,
     use_custom_triton_kernels: bool = False,
+    attention_method: str = "torch_sdpa",
     check_nsfw: bool = True,
     num_steps: int | None = None,
     loop: bool = False,
@@ -157,7 +158,12 @@ def main(
     # init all components
     t5 = load_t5(torch_device, max_length=256 if name == "flux-schnell" else 512)
     clip = load_clip(torch_device)
-    model = load_flow_model(name, device="cpu" if offload else torch_device, use_custom_triton_kernels=use_custom_triton_kernels)  # noqa
+    model = load_flow_model(
+        name,
+        device="cpu" if offload else torch_device,
+        use_custom_triton_kernels=use_custom_triton_kernels,
+        attention_method=attention_method,
+    )
     ae = load_ae(name, device="cpu" if offload else torch_device)
 
     if torch_compile:

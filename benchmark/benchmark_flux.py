@@ -22,14 +22,13 @@ console = Console()
 
 @dataclass
 class BenchmarkOptions:
-    """CLI의 SamplingOptions를 벤치마크용으로 확장"""
-
     name: str = "flux-schnell"
     width: int = 1360
     height: int = 768
     prompt: str = "a photo of a forest with mist swirling around the tree trunks"
     torch_compile: bool = False
     use_custom_triton_kernels: bool = False
+    attention_method: str = "torch_sdpa"
     num_steps: int | None = None
     guidance: float = 3.5
     warmup_iterations: int = 3
@@ -58,7 +57,12 @@ class FluxBenchmark:
             self.device, max_length=256 if self.options.name == "flux-schnell" else 512
         )
         self.clip = load_clip(self.device)
-        self.model = load_flow_model(self.options.name, device=self.device, use_custom_triton_kernels=self.options.use_custom_triton_kernels)  # noqa
+        self.model = load_flow_model(
+            self.options.name,
+            device=self.device,
+            use_custom_triton_kernels=self.options.use_custom_triton_kernels,
+            attention_method=self.options.attention_method,
+        )
         self.ae = load_ae(self.options.name, device=self.device)
 
         if self.options.torch_compile:
@@ -167,6 +171,7 @@ def run(
     prompt: str = "a photo of a forest with mist swirling around the tree trunks",
     torch_compile: bool = False,
     use_custom_triton_kernels: bool = False,
+    attention_method: str = "torch_sdpa",
     num_steps: int | None = None,
     guidance: float = 3.5,
     warmup_iterations: int = 3,
@@ -182,6 +187,7 @@ def run(
         prompt=prompt,
         torch_compile=torch_compile,
         use_custom_triton_kernels=use_custom_triton_kernels,
+        attention_method=attention_method,
         num_steps=num_steps,
         guidance=guidance,
         warmup_iterations=warmup_iterations,
