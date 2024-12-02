@@ -2,6 +2,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 import json
+import os
 
 import torch
 import torch._inductor.config as inductor_config
@@ -29,6 +30,7 @@ class BenchmarkOptions:
     torch_compile: bool = False
     use_custom_triton_kernels: bool = False
     attention_method: str = "torch_sdpa"
+    offload: bool = False
     num_steps: int | None = None
     guidance: float = 3.5
     warmup_iterations: int = 3
@@ -51,19 +53,20 @@ class FluxBenchmark:
         Path(self.options.output_dir).mkdir(parents=True, exist_ok=True)
 
     def setup_model(self):
-        """CLI와 동일한 방식으로 모델 초기화"""
         console.print("Loading models...")
+        model_device = "cpu" if self.options.offload else self.device
+
         self.t5 = load_t5(
             self.device, max_length=256 if self.options.name == "flux-schnell" else 512
         )
         self.clip = load_clip(self.device)
         self.model = load_flow_model(
             self.options.name,
-            device=self.device,
+            device=model_device,
             use_custom_triton_kernels=self.options.use_custom_triton_kernels,
             attention_method=self.options.attention_method,
         )
-        self.ae = load_ae(self.options.name, device=self.device)
+        self.ae = load_ae(self.options.name, device=model_device)
 
         if self.options.torch_compile:
             console.print("Compiling model...")
@@ -78,54 +81,72 @@ class FluxBenchmark:
                 mode="max-autotune",
             )
 
+    @torch.inference_mode()
     def _single_run(self, seed: int | None = None) -> float:
-        """단일 실행에 대한 시간 측정"""
+        """Measure the single inference time"""
         rng = torch.Generator(device="cpu")
         if seed is None:
             seed = rng.seed()
 
         t0 = time.perf_counter()
 
-        with torch.inference_mode():
-            # CLI와 동일한 이미지 생성 프로세스
-            x = get_noise(
-                1,
-                self.options.height,
-                self.options.width,
-                device=self.device,
-                dtype=torch.bfloat16,
-                seed=seed,
-            )
+        # Get noise and prepare input
+        x = get_noise(
+            1,
+            self.options.height,
+            self.options.width,
+            device=self.device,
+            dtype=torch.bfloat16,
+            seed=seed,
+        )
 
-            inp = prepare(self.t5, self.clip, x, prompt=self.options.prompt)
-            assert self.options.num_steps is not None, "num_steps must be set"
-            timesteps = get_schedule(
-                self.options.num_steps,
-                inp["img"].shape[1],
-                shift=(self.options.name != "flux-schnell"),
-            )
+        # Offload handling for input preparation
+        if self.options.offload:
+            self.ae = self.ae.cpu()
+            torch.cuda.empty_cache()
+            self.t5, self.clip = self.t5.to(self.device), self.clip.to(self.device)
 
-            x = denoise(
-                self.model, **inp, timesteps=timesteps, guidance=self.options.guidance  # type: ignore
-            )
-            x = unpack(x.float(), self.options.height, self.options.width)
+        inp = prepare(self.t5, self.clip, x, prompt=self.options.prompt)
+        assert self.options.num_steps is not None, "num_steps must be set"
+        timesteps = get_schedule(
+            self.options.num_steps,
+            inp["img"].shape[1],
+            shift=(self.options.name != "flux-schnell"),
+        )
 
-            with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16):
-                x = self.ae.decode(x)
+        # Offload handling for model inference
+        if self.options.offload:
+            self.t5, self.clip = self.t5.cpu(), self.clip.cpu()
+            torch.cuda.empty_cache()
+            self.model = self.model.to(self.device)
 
-            torch.cuda.synchronize()
+        x = denoise(
+            self.model, **inp, timesteps=timesteps, guidance=self.options.guidance  # type: ignore
+        )
+
+        # Offload handling for decoding
+        if self.options.offload:
+            self.model = self.model.cpu()
+            torch.cuda.empty_cache()
+            self.ae = self.ae.to(self.device)
+
+        x = unpack(x.float(), self.options.height, self.options.width)
+
+        with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16):
+            x = self.ae.decode(x)
+
+        torch.cuda.synchronize()
 
         t1 = time.perf_counter()
         return t1 - t0
 
     def run_benchmark(self):
-        """벤치마크 실행"""
-        # 워밍업
         console.print(
             f"\nRunning {self.options.warmup_iterations} warmup iterations..."
         )
-        for _ in range(self.options.warmup_iterations):
-            self._single_run()
+        for i in range(self.options.warmup_iterations):
+            elapsed_time = self._single_run()
+            console.print(f"Iteration {i+1}: {elapsed_time:.3f}s")
 
         # 실제 벤치마크
         console.print(
@@ -137,10 +158,16 @@ class FluxBenchmark:
             console.print(f"Iteration {i+1}: {elapsed_time:.3f}s")
 
         # 결과 분석
+        p99_time = torch.tensor(self.results).quantile(0.99).item()
+        p90_time = torch.tensor(self.results).quantile(0.90).item()
+        p50_time = torch.tensor(self.results).median().item()
         mean_time = sum(self.results) / len(self.results)
         std_time = torch.tensor(self.results).std().item()
 
         console.print("\n[bold green]Benchmark Results:")
+        console.print(f"99th percentile inference time: {p99_time:.3f}s")
+        console.print(f"90th percentile inference time: {p90_time:.3f}s")
+        console.print(f"Median inference time: {p50_time:.3f}s")
         console.print(f"Mean inference time: {mean_time:.3f}s")
         console.print(f"Std deviation: {std_time:.3f}s")
 
@@ -163,43 +190,21 @@ class FluxBenchmark:
             console.print(f"\nResults saved to {result_file}")
 
 
-@app.command()
-def run(
-    name: str = "flux-schnell",
-    width: int = 1360,
-    height: int = 768,
-    prompt: str = "a photo of a forest with mist swirling around the tree trunks",
-    torch_compile: bool = False,
-    use_custom_triton_kernels: bool = False,
-    attention_method: str = "torch_sdpa",
-    num_steps: int | None = None,
-    guidance: float = 3.5,
-    warmup_iterations: int = 3,
-    benchmark_iterations: int = 10,
-    save_results: bool = True,
-    output_dir: str = "benchmark_results",
-):
-    """FLUX 모델 벤치마크 실행"""
-    options = BenchmarkOptions(
-        name=name,
-        width=width,
-        height=height,
-        prompt=prompt,
-        torch_compile=torch_compile,
-        use_custom_triton_kernels=use_custom_triton_kernels,
-        attention_method=attention_method,
-        num_steps=num_steps,
-        guidance=guidance,
-        warmup_iterations=warmup_iterations,
-        benchmark_iterations=benchmark_iterations,
-        save_results=save_results,
-        output_dir=output_dir,
-    )
-
-    benchmark = FluxBenchmark(options)
-    benchmark.setup_model()
-    benchmark.run_benchmark()
-
-
 if __name__ == "__main__":
-    app()
+    base_dir_path = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(base_dir_path, "benchmark_opts.json"), "r") as f:
+        opts = json.load(f)
+
+    for opt_name, opt in opts.items():
+        console.print(
+            f"\n[bold cyan]Running benchmark for configuration: {opt_name}[/bold cyan]"
+        )
+        console.print("=" * 80)
+
+        benchmark_opt = BenchmarkOptions(**opt)
+        benchmark_opt.output_dir = os.path.join(base_dir_path, benchmark_opt.output_dir)
+        console.print(f"Options: {benchmark_opt}")
+
+        benchmark = FluxBenchmark(benchmark_opt)
+        benchmark.setup_model()
+        benchmark.run_benchmark()
