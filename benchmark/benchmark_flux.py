@@ -37,6 +37,7 @@ class BenchmarkOptions:
     benchmark_iterations: int = 10
     save_results: bool = True
     output_dir: str = "benchmark_results"
+    output_file_base_name: str = "benchmark_results"
 
 
 class FluxBenchmark:
@@ -185,7 +186,7 @@ class FluxBenchmark:
 
             timestamp = time.strftime("%Y%m%d-%H%M%S")
             result_file = (
-                Path(self.options.output_dir) / f"benchmark_results_{timestamp}.json"
+                Path(self.options.output_dir) / f"{self.options.output_file_base_name}_{timestamp}.json"
             )
 
             with open(result_file, "w") as f:
@@ -210,6 +211,7 @@ if __name__ == "__main__":
         benchmark_opt.output_dir = os.path.join(
             base_dir_path, benchmark_opt.output_dir, sub_dir_name
         )
+        benchmark_opt.output_file_base_name = opt_name
         console.print(f"Options: {benchmark_opt}")
 
         try:
