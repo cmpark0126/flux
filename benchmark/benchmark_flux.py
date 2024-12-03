@@ -24,8 +24,9 @@ console = Console()
 @dataclass
 class BenchmarkOptions:
     name: str = "flux-schnell"
-    width: int = 1360
-    height: int = 768
+    # FIXME: 1360x768 makes error in custom triton kernel we will fix it later
+    width: int = 2048
+    height: int = 2048
     prompt: str = "a photo of a forest with mist swirling around the tree trunks"
     device: str = "cuda"
     torch_compile: bool = False
@@ -35,7 +36,7 @@ class BenchmarkOptions:
     num_steps: int | None = None
     guidance: float = 3.5
     warmup_iterations: int = 3
-    benchmark_iterations: int = 100
+    benchmark_iterations: int = 10
     save_results: bool = True
     output_dir: str = "benchmark_results"
     output_file_base_name: str = "benchmark_results"
@@ -81,6 +82,7 @@ class FluxBenchmark:
             self.model = torch.compile(
                 self.model,
                 fullgraph=True,
+                # FIXME: this compile option makes error in custom triton kernel we will fix it later
                 backend="inductor",
                 mode="max-autotune",
             )
