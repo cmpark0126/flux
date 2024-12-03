@@ -27,6 +27,7 @@ class BenchmarkOptions:
     width: int = 1360
     height: int = 768
     prompt: str = "a photo of a forest with mist swirling around the tree trunks"
+    device: str = "cuda"
     torch_compile: bool = False
     use_custom_triton_kernels: bool = False
     attention_method: str = "torch_sdpa"
@@ -43,7 +44,6 @@ class BenchmarkOptions:
 class FluxBenchmark:
     def __init__(self, options: BenchmarkOptions):
         self.options = options
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.results = []
 
         # CLI와 동일한 방식으로 steps 설정
@@ -55,19 +55,22 @@ class FluxBenchmark:
 
     def setup_model(self):
         console.print("Loading models...")
-        model_device = "cpu" if self.options.offload else self.device
 
         self.t5 = load_t5(
-            self.device, max_length=256 if self.options.name == "flux-schnell" else 512
+            self.options.device,
+            max_length=256 if self.options.name == "flux-schnell" else 512,
         )
-        self.clip = load_clip(self.device)
+        self.clip = load_clip(self.options.device)
         self.model = load_flow_model(
             self.options.name,
-            device=model_device,
+            device="cpu" if self.options.offload else self.options.device,
             use_custom_triton_kernels=self.options.use_custom_triton_kernels,
             attention_method=self.options.attention_method,
         )
-        self.ae = load_ae(self.options.name, device=model_device)
+        self.ae = load_ae(
+            self.options.name,
+            device="cpu" if self.options.offload else self.options.device,
+        )
 
         if self.options.torch_compile:
             console.print("Compiling model...")
@@ -96,7 +99,7 @@ class FluxBenchmark:
             1,
             self.options.height,
             self.options.width,
-            device=self.device,
+            device=torch.device(self.options.device),
             dtype=torch.bfloat16,
             seed=seed,
         )
@@ -105,7 +108,8 @@ class FluxBenchmark:
         if self.options.offload:
             self.ae = self.ae.cpu()
             torch.cuda.empty_cache()
-            self.t5, self.clip = self.t5.to(self.device), self.clip.to(self.device)
+            self.t5 = self.t5.to(self.options.device)
+            self.clip = self.clip.to(self.options.device)
 
         inp = prepare(self.t5, self.clip, x, prompt=self.options.prompt)
         assert self.options.num_steps is not None, "num_steps must be set"
@@ -119,7 +123,7 @@ class FluxBenchmark:
         if self.options.offload:
             self.t5, self.clip = self.t5.cpu(), self.clip.cpu()
             torch.cuda.empty_cache()
-            self.model = self.model.to(self.device)
+            self.model = self.model.to(self.options.device)
 
         x = denoise(
             self.model, **inp, timesteps=timesteps, guidance=self.options.guidance  # type: ignore
@@ -129,12 +133,16 @@ class FluxBenchmark:
         if self.options.offload:
             self.model = self.model.cpu()
             torch.cuda.empty_cache()
-            self.ae = self.ae.to(self.device)
+            self.ae = self.ae.to(self.options.device)
 
         x = unpack(x.float(), self.options.height, self.options.width)
 
-        with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16):
+        with torch.autocast(
+            device_type=torch.device(self.options.device).type, dtype=torch.bfloat16
+        ):
             x = self.ae.decode(x)
+
+        # NOTE: skip nsfw check here
 
         torch.cuda.synchronize()
 
@@ -186,7 +194,8 @@ class FluxBenchmark:
 
             timestamp = time.strftime("%Y%m%d-%H%M%S")
             result_file = (
-                Path(self.options.output_dir) / f"{self.options.output_file_base_name}_{timestamp}.json"
+                Path(self.options.output_dir)
+                / f"{self.options.output_file_base_name}_{timestamp}.json"
             )
 
             with open(result_file, "w") as f:
