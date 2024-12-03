@@ -170,20 +170,29 @@ class FluxBenchmark:
         console.print(
             f"\nRunning {self.options.benchmark_iterations} benchmark iterations..."
         )
-        with torch.profiler.profile(
-            activities=[
-                torch.profiler.ProfilerActivity.CPU,
-                torch.profiler.ProfilerActivity.CUDA,
-            ],
-            with_stack=True,
-            profile_memory=True,
-            record_shapes=True,
-            with_flops=True
-        ) as prof:
-            for i in range(self.options.benchmark_iterations):
+
+        for i in range(self.options.benchmark_iterations):
+            with torch.profiler.profile(
+                activities=[
+                    torch.profiler.ProfilerActivity.CPU,
+                    torch.profiler.ProfilerActivity.CUDA,
+                ],
+                # NOTE: to diet the output, we disable some options
+                # with_stack=True,
+                # profile_memory=True,
+                # record_shapes=True,
+                # with_flops=True
+            ) as prof:
                 elapsed_time = self._single_run()
-                self.results.append(elapsed_time)
-                console.print(f"Iteration {i+1}: {elapsed_time:.3f}s")
+            self.results.append(elapsed_time)
+            console.print(f"Iteration {i+1}: {elapsed_time:.3f}s")
+
+            trace_file = (
+                Path(self.options.output_dir)
+                / f"{self.options.output_file_base_name}_{i}.trace.json"
+            )
+            prof.export_chrome_trace(str(trace_file))
+            console.print(f"\nTrace saved to {trace_file}")
 
         # 결과 분석
         p99_time = torch.tensor(self.results).quantile(0.99).item()
@@ -211,22 +220,14 @@ class FluxBenchmark:
                 "std_time": std_time,
             }
 
-            timestamp = time.strftime("%Y%m%d-%H%M%S")
             result_file = (
                 Path(self.options.output_dir)
-                / f"{self.options.output_file_base_name}_{timestamp}.json"
+                / f"{self.options.output_file_base_name}.json"
             )
 
             with open(result_file, "w") as f:
                 json.dump(results_data, f, indent=2)
             console.print(f"\nResults saved to {result_file}")
-
-            trace_file = (
-                Path(self.options.output_dir)
-                / f"{self.options.output_file_base_name}_{timestamp}.trace.json"
-            )
-            prof.export_chrome_trace(str(trace_file))
-            console.print(f"\nTrace saved to {trace_file}")
 
 
 if __name__ == "__main__":
@@ -260,7 +261,7 @@ if __name__ == "__main__":
                 timestamp = time.strftime("%Y%m%d-%H%M%S")
                 result_file = (
                     Path(benchmark_opt.output_dir)
-                    / f"{benchmark_opt.output_file_base_name}_{timestamp}.json"
+                    / f"{benchmark_opt.output_file_base_name}.json"
                 )
                 with open(result_file, "w") as f:
                     json.dump(
