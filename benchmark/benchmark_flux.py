@@ -35,7 +35,7 @@ class BenchmarkOptions:
     num_steps: int | None = None
     guidance: float = 3.5
     warmup_iterations: int = 3
-    benchmark_iterations: int = 10
+    benchmark_iterations: int = 100
     save_results: bool = True
     output_dir: str = "benchmark_results"
     output_file_base_name: str = "benchmark_results"
