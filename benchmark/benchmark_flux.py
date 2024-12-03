@@ -5,6 +5,7 @@ import json
 import os
 
 import torch
+from torch.profiler import record_function
 import torch._inductor.config as inductor_config
 import typer
 from rich.console import Console
@@ -96,53 +97,59 @@ class FluxBenchmark:
 
         t0 = time.perf_counter()
 
-        # Get noise and prepare input
-        x = get_noise(
-            1,
-            self.options.height,
-            self.options.width,
-            device=torch.device(self.options.device),
-            dtype=torch.bfloat16,
-            seed=seed,
-        )
+        with record_function("t5, clip"):
+            # Get noise and prepare input
+            x = get_noise(
+                1,
+                self.options.height,
+                self.options.width,
+                device=torch.device(self.options.device),
+                dtype=torch.bfloat16,
+                seed=seed,
+            )
 
-        # Offload handling for input preparation
-        if self.options.offload:
-            self.ae = self.ae.cpu()
-            torch.cuda.empty_cache()
-            self.t5 = self.t5.to(self.options.device)
-            self.clip = self.clip.to(self.options.device)
+            # Offload handling for input preparation
+            if self.options.offload:
+                with record_function("offload"):
+                    self.ae = self.ae.cpu()
+                    torch.cuda.empty_cache()
+                    self.t5 = self.t5.to(self.options.device)
+                    self.clip = self.clip.to(self.options.device)
 
-        inp = prepare(self.t5, self.clip, x, prompt=self.options.prompt)
-        assert self.options.num_steps is not None, "num_steps must be set"
-        timesteps = get_schedule(
-            self.options.num_steps,
-            inp["img"].shape[1],
-            shift=(self.options.name != "flux-schnell"),
-        )
+            inp = prepare(self.t5, self.clip, x, prompt=self.options.prompt)
+            assert self.options.num_steps is not None, "num_steps must be set"
+            timesteps = get_schedule(
+                self.options.num_steps,
+                inp["img"].shape[1],
+                shift=(self.options.name != "flux-schnell"),
+            )
 
-        # Offload handling for model inference
-        if self.options.offload:
-            self.t5, self.clip = self.t5.cpu(), self.clip.cpu()
-            torch.cuda.empty_cache()
-            self.model = self.model.to(self.options.device)
+        with record_function("flux"):
+            # Offload handling for model inference
+            if self.options.offload:
+                with record_function("offload"):
+                    self.t5, self.clip = self.t5.cpu(), self.clip.cpu()
+                    torch.cuda.empty_cache()
+                    self.model = self.model.to(self.options.device)
 
-        x = denoise(
-            self.model, **inp, timesteps=timesteps, guidance=self.options.guidance  # type: ignore
-        )
+            x = denoise(
+                self.model, **inp, timesteps=timesteps, guidance=self.options.guidance  # type: ignore
+            )
 
-        # Offload handling for decoding
-        if self.options.offload:
-            self.model = self.model.cpu()
-            torch.cuda.empty_cache()
-            self.ae = self.ae.to(self.options.device)
+        with record_function("auto-encoder"):
+            # Offload handling for decoding
+            if self.options.offload:
+                with record_function("offload"):
+                    self.model = self.model.cpu()
+                    torch.cuda.empty_cache()
+                    self.ae = self.ae.to(self.options.device)
 
-        x = unpack(x.float(), self.options.height, self.options.width)
+            x = unpack(x.float(), self.options.height, self.options.width)
 
-        with torch.autocast(
-            device_type=torch.device(self.options.device).type, dtype=torch.bfloat16
-        ):
-            x = self.ae.decode(x)
+            with torch.autocast(
+                device_type=torch.device(self.options.device).type, dtype=torch.bfloat16
+            ):
+                x = self.ae.decode(x)
 
         # NOTE: skip nsfw check here
 
@@ -163,10 +170,20 @@ class FluxBenchmark:
         console.print(
             f"\nRunning {self.options.benchmark_iterations} benchmark iterations..."
         )
-        for i in range(self.options.benchmark_iterations):
-            elapsed_time = self._single_run()
-            self.results.append(elapsed_time)
-            console.print(f"Iteration {i+1}: {elapsed_time:.3f}s")
+        with torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            with_stack=True,
+            profile_memory=True,
+            record_shapes=True,
+            with_flops=True
+        ) as prof:
+            for i in range(self.options.benchmark_iterations):
+                elapsed_time = self._single_run()
+                self.results.append(elapsed_time)
+                console.print(f"Iteration {i+1}: {elapsed_time:.3f}s")
 
         # 결과 분석
         p99_time = torch.tensor(self.results).quantile(0.99).item()
@@ -203,6 +220,13 @@ class FluxBenchmark:
             with open(result_file, "w") as f:
                 json.dump(results_data, f, indent=2)
             console.print(f"\nResults saved to {result_file}")
+
+            trace_file = (
+                Path(self.options.output_dir)
+                / f"{self.options.output_file_base_name}_{timestamp}.trace.json"
+            )
+            prof.export_chrome_trace(str(trace_file))
+            console.print(f"\nTrace saved to {trace_file}")
 
 
 if __name__ == "__main__":
