@@ -17,7 +17,13 @@
         "attention_method": "torch_sdpa",
         "offload": true
     },
-    "xformers_flash": {
+    "compiled_offloaded_torch_sdpa": {
+        "torch_compile": true,
+        "use_custom_triton_kernels": false,
+        "attention_method": "torch_sdpa",
+        "offload": true
+    },
+    "base_xformers_flash": {
         "torch_compile": false,
         "use_custom_triton_kernels": false,
         "attention_method": "xformers_flash",
@@ -29,7 +35,19 @@
         "attention_method": "xformers_flash",
         "offload": false
     },
-    "xformers_compiled_flash": {
+    "offloaded_xformers_flash": {
+        "torch_compile": false,
+        "use_custom_triton_kernels": false,
+        "attention_method": "xformers_flash",
+        "offload": true
+    },
+    "compiled_offloaded_xformers_flash": {
+        "torch_compile": true,
+        "use_custom_triton_kernels": false,
+        "attention_method": "xformers_flash",
+        "offload": true
+    },
+    "base_xformers_compiled_flash": {
         "torch_compile": false,
         "use_custom_triton_kernels": false,
         "attention_method": "xformers_compiled_flash",
@@ -41,7 +59,19 @@
         "attention_method": "xformers_compiled_flash",
         "offload": false
     },
-    "triton_attention": {
+    "offloaded_xformers_compiled_flash": {
+        "torch_compile": false,
+        "use_custom_triton_kernels": false,
+        "attention_method": "xformers_compiled_flash",
+        "offload": true
+    },
+    "compiled_offloaded_xformers_compiled_flash": {
+        "torch_compile": true,
+        "use_custom_triton_kernels": false,
+        "attention_method": "xformers_compiled_flash",
+        "offload": true
+    },
+    "base_triton_attention": {
         "torch_compile": false,
         "use_custom_triton_kernels": false,
         "attention_method": "triton_attention",
@@ -53,7 +83,19 @@
         "attention_method": "triton_attention",
         "offload": false
     },
-    "custom_triton_kernels": {
+    "offloaded_triton_attention": {
+        "torch_compile": false,
+        "use_custom_triton_kernels": false,
+        "attention_method": "triton_attention",
+        "offload": true
+    },
+    "compiled_offloaded_triton_attention": {
+        "torch_compile": true,
+        "use_custom_triton_kernels": false,
+        "attention_method": "triton_attention",
+        "offload": true
+    },
+    "base_custom_triton_kernels": {
         "torch_compile": false,
         "use_custom_triton_kernels": true,
         "attention_method": "none",
@@ -64,5 +106,17 @@
         "use_custom_triton_kernels": true,
         "attention_method": "none",
         "offload": false
+    },
+    "offloaded_custom_triton_kernels": {
+        "torch_compile": false,
+        "use_custom_triton_kernels": true,
+        "attention_method": "none",
+        "offload": true
+    },
+    "compiled_offloaded_custom_triton_kernels": {
+        "torch_compile": true,
+        "use_custom_triton_kernels": true,
+        "attention_method": "none",
+        "offload": true
     }
 }

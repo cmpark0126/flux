@@ -225,7 +225,7 @@ if __name__ == "__main__":
                 timestamp = time.strftime("%Y%m%d-%H%M%S")
                 result_file = (
                     Path(benchmark_opt.output_dir)
-                    / f"benchmark_results_{timestamp}.json"
+                    / f"{benchmark_opt.output_file_base_name}_{timestamp}.json"
                 )
                 with open(result_file, "w") as f:
                     json.dump(
