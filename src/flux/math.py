@@ -1,24 +1,22 @@
-import os
-
 import torch
 from torch import Tensor
 from torch.nn.functional import scaled_dot_product_attention
 from einops import rearrange
+from triton.ops import attention as attention_triton
 
 
-def _compiled_xformers_flash_hopper(q, k, v):
+def _xformers_flash_hopper(q, k, v, compile: bool):
+    import xformers
     import xformers.ops
 
-    torch_custom_op_compile = os.getenv("TORCH_CUSTOM_OP_COMPILE", "0") == "1"
-
-    if torch_custom_op_compile:
-        xformers_flash3 = torch.compile(
-            xformers.ops.fmha.flash3.FwOp,
+    if compile:
+        xformers_flash = torch.compile(
+            xformers.ops.fmha.flash.FwOp,
             fullgraph=True,
             backend="inductor",
         )
     else:
-        xformers_flash3 = xformers.ops.fmha.flash3.FwOp()
+        xformers_flash = xformers.ops.fmha.flash.FwOp()
     softmax_scale = q.size(-1) ** -0.5
 
     return xformers.ops.fmha.memory_efficient_attention_forward(  # noqa: E731
@@ -26,45 +24,32 @@ def _compiled_xformers_flash_hopper(q, k, v):
         k,
         v,
         scale=softmax_scale,
-        op=xformers_flash3,
+        op=xformers_flash,  # type: ignore
     )
 
-def attention(q: Tensor, k: Tensor, v: Tensor, pe: Tensor) -> Tensor:
-    xformers_flash3 = os.getenv("XFORMERS_FLASH3", "0") == "1"
-    torch_sdpa = os.getenv("TORCH_SDPA", "0") == "1"
-    triton_attention = os.getenv("TRITON_ATTENTION", "0") == "1"
 
+def attention(q: Tensor, k: Tensor, v: Tensor, pe: Tensor, method: str) -> Tensor:
     q, k = apply_rope(q, k, pe)
 
-    if xformers_flash3:
-        if torch_sdpa or triton_attention:
-            print(
-                "Warning: xformers_flash3 is enabled, but torch_sdpa or triton_attention is also enabled. "
-                "Please remain only one of them."
-            )
+    if method == "xformers_compiled_flash" or method == "xformers_flash":
+        q = q.permute(0, 2, 1, 3)  # B, H, S, D
+        k = k.permute(0, 2, 1, 3)  # B, H, S, D
+        v = v.permute(0, 2, 1, 3)  # B, H, S, D
 
-        q = q.permute(0, 2, 1, 3) # B, H, S, D
-        k = k.permute(0, 2, 1, 3) # B, H, S, D
-        v = v.permute(0, 2, 1, 3) # B, H, S, D
-        
-        x = _compiled_xformers_flash_hopper(q, k, v).permute(0,2,1,3)
-    elif torch_sdpa:
-        if triton_attention:
-            print(
-                "Warning: torch_sdpa is enabled, but triton_attention is also enabled. "
-                "Please remain only one of them."
-            )
-
+        if "compiled" in method:
+            x = _xformers_flash_hopper(q, k, v, compile=True).permute(0, 2, 1, 3)
+        else:
+            x = _xformers_flash_hopper(q, k, v, compile=False).permute(0, 2, 1, 3)
+    elif method == "torch_sdpa":
         x = scaled_dot_product_attention(q, k, v)
-    elif triton_attention:
-        from triton.ops import attention as attention_triton
-
+    elif method == "triton_attention":
         softmax_scale = q.size(-1) ** -0.5
         x = attention_triton(q, k, v, True, softmax_scale)
     else:
-        x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+        raise ValueError(f"Unknown method {method}")
 
     x = rearrange(x, "B H L D -> B L (H D)")
+    assert x is not None, "x is None"
     return x
 
 

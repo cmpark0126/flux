@@ -8,21 +8,16 @@ from flux.modules.layers import (
     LastLayer,
     MLPEmbedder,
     timestep_embedding,
+    SingleStreamBlock as DefaultSingleStreamBlock,
+    DoubleStreamBlock as DefaultDoubleStreamBlock,
 )
 from flux.modules.lora import LinearLora, replace_linear_with_lora
 
-try:
-    import triton_kernels
-    from triton_kernels import SingleStreamBlock, DoubleStreamBlock
-except ImportError:
-    print("Triton kernels not found, using flux native implementation.")
-    from flux.modules.layers import SingleStreamBlock, DoubleStreamBlock
-except ModuleNotFoundError:
-    print("Triton kernels not found, using flux native implementation.")
-    from flux.modules.layers import SingleStreamBlock, DoubleStreamBlock
-except Exception as e:
-    print(f"Error: {e}")
-    from flux.modules.layers import SingleStreamBlock, DoubleStreamBlock
+from triton_kernels import (
+    SingleStreamBlock as CustomSingleStreamBlock,
+    DoubleStreamBlock as CustomDoubleStreamBlock,
+)
+
 
 @dataclass
 class FluxParams:
@@ -39,6 +34,8 @@ class FluxParams:
     theta: int
     qkv_bias: bool
     guidance_embed: bool
+    use_custom_triton_kernels: bool = False
+    attention_method: str = "torch_sdpa"
 
 
 class Flux(nn.Module):
@@ -48,6 +45,15 @@ class Flux(nn.Module):
 
     def __init__(self, params: FluxParams):
         super().__init__()
+
+        if params.use_custom_triton_kernels:
+            SingleStreamBlock = CustomSingleStreamBlock
+            DoubleStreamBlock = CustomDoubleStreamBlock
+            if params.attention_method != "none":
+                raise ValueError("Custom kernels are used, so attention_method must be 'none'")
+        else:
+            SingleStreamBlock = DefaultSingleStreamBlock
+            DoubleStreamBlock = DefaultDoubleStreamBlock
 
         self.params = params
         self.in_channels = params.in_channels
@@ -70,23 +76,32 @@ class Flux(nn.Module):
         )
         self.txt_in = nn.Linear(params.context_in_dim, self.hidden_size)
 
+        def _create_double_stream_block():
+            double_block = DoubleStreamBlock(
+                self.hidden_size,
+                self.num_heads,
+                mlp_ratio=params.mlp_ratio,
+                qkv_bias=params.qkv_bias,
+            )
+            if not params.use_custom_triton_kernels:
+                double_block.set_attention_method(params.attention_method)
+            return double_block
+
         self.double_blocks = nn.ModuleList(
             [
-                DoubleStreamBlock(
-                    self.hidden_size,
-                    self.num_heads,
-                    mlp_ratio=params.mlp_ratio,
-                    qkv_bias=params.qkv_bias,
-                )
+                _create_double_stream_block()
                 for _ in range(params.depth)
             ]
         )
 
+        def _create_single_stream_block():
+            single_block = SingleStreamBlock(self.hidden_size, self.num_heads, mlp_ratio=params.mlp_ratio)
+            if not params.use_custom_triton_kernels:
+                single_block.set_attention_method(params.attention_method)
+            return single_block
+
         self.single_blocks = nn.ModuleList(
-            [
-                SingleStreamBlock(self.hidden_size, self.num_heads, mlp_ratio=params.mlp_ratio)
-                for _ in range(params.depth_single_blocks)
-            ]
+            [_create_single_stream_block() for _ in range(params.depth_single_blocks)]
         )
 
         self.final_layer = LastLayer(self.hidden_size, 1, self.out_channels)

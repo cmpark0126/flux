@@ -85,7 +85,7 @@ class QKNorm(torch.nn.Module):
 
 
 class SelfAttention(nn.Module):
-    def __init__(self, dim: int, num_heads: int = 8, qkv_bias: bool = False):
+    def __init__(self, dim: int, attention_method: str, num_heads: int = 8, qkv_bias: bool = False):
         super().__init__()
         self.num_heads = num_heads
         head_dim = dim // num_heads
@@ -94,11 +94,16 @@ class SelfAttention(nn.Module):
         self.norm = QKNorm(head_dim)
         self.proj = nn.Linear(dim, dim)
 
+        self.attention_method = attention_method
+
+    def set_attention_method(self, attention_method: str):
+        self.attention_method = attention_method
+
     def forward(self, x: Tensor, pe: Tensor) -> Tensor:
         qkv = self.qkv(x)
         q, k, v = rearrange(qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
         q, k = self.norm(q, k, v)
-        x = attention(q, k, v, pe=pe)
+        x = attention(q, k, v, pe=pe, method=self.attention_method)
         x = self.proj(x)
         return x
 
@@ -127,7 +132,14 @@ class Modulation(nn.Module):
 
 
 class DoubleStreamBlock(nn.Module):
-    def __init__(self, hidden_size: int, num_heads: int, mlp_ratio: float, qkv_bias: bool = False):
+    def __init__(
+        self,
+        hidden_size: int,
+        num_heads: int,
+        mlp_ratio: float,
+        qkv_bias: bool = False,
+        attention_method: str = "none",
+    ):
         super().__init__()
 
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
@@ -135,7 +147,9 @@ class DoubleStreamBlock(nn.Module):
         self.hidden_size = hidden_size
         self.img_mod = Modulation(hidden_size, double=True)
         self.img_norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.img_attn = SelfAttention(dim=hidden_size, num_heads=num_heads, qkv_bias=qkv_bias)
+        self.img_attn = SelfAttention(
+            dim=hidden_size, attention_method=attention_method, num_heads=num_heads, qkv_bias=qkv_bias
+        )
 
         self.img_norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.img_mlp = nn.Sequential(
@@ -146,7 +160,12 @@ class DoubleStreamBlock(nn.Module):
 
         self.txt_mod = Modulation(hidden_size, double=True)
         self.txt_norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.txt_attn = SelfAttention(dim=hidden_size, num_heads=num_heads, qkv_bias=qkv_bias)
+        self.txt_attn = SelfAttention(
+            dim=hidden_size,
+            attention_method=attention_method,
+            num_heads=num_heads,
+            qkv_bias=qkv_bias,
+        )
 
         self.txt_norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.txt_mlp = nn.Sequential(
@@ -154,6 +173,13 @@ class DoubleStreamBlock(nn.Module):
             nn.GELU(approximate="tanh"),
             nn.Linear(mlp_hidden_dim, hidden_size, bias=True),
         )
+
+        self.attention_method = attention_method
+
+    def set_attention_method(self, attention_method: str):
+        self.img_attn.set_attention_method(attention_method)
+        self.txt_attn.set_attention_method(attention_method)
+        self.attention_method = attention_method
 
     def forward(self, img: Tensor, txt: Tensor, vec: Tensor, pe: Tensor) -> tuple[Tensor, Tensor]:
         img_mod1, img_mod2 = self.img_mod(vec)
@@ -178,7 +204,7 @@ class DoubleStreamBlock(nn.Module):
         k = torch.cat((txt_k, img_k), dim=2)
         v = torch.cat((txt_v, img_v), dim=2)
 
-        attn = attention(q, k, v, pe=pe)
+        attn = attention(q, k, v, pe=pe, method=self.attention_method)
         txt_attn, img_attn = attn[:, : txt.shape[1]], attn[:, txt.shape[1] :]
 
         # calculate the img bloks
@@ -203,6 +229,7 @@ class SingleStreamBlock(nn.Module):
         num_heads: int,
         mlp_ratio: float = 4.0,
         qk_scale: float | None = None,
+        attention_method: str = "none",
     ):
         super().__init__()
         self.hidden_dim = hidden_size
@@ -224,6 +251,11 @@ class SingleStreamBlock(nn.Module):
         self.mlp_act = nn.GELU(approximate="tanh")
         self.modulation = Modulation(hidden_size, double=False)
 
+        self.attention_method = attention_method
+
+    def set_attention_method(self, attention_method: str):
+        self.attention_method = attention_method
+
     def forward(self, x: Tensor, vec: Tensor, pe: Tensor) -> Tensor:
         mod, _ = self.modulation(vec)
         x_mod = (1 + mod.scale) * self.pre_norm(x) + mod.shift
@@ -233,7 +265,7 @@ class SingleStreamBlock(nn.Module):
         q, k = self.norm(q, k, v)
 
         # compute attention
-        attn = attention(q, k, v, pe=pe)
+        attn = attention(q, k, v, pe=pe, method=self.attention_method)
         # compute activation in mlp stream, cat again and run second linear layer
         output = self.linear2(torch.cat((attn, self.mlp_act(mlp)), 2))
         return x + mod.gate * output
